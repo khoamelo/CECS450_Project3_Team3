@@ -16,9 +16,7 @@ lebron['Player']  = 'Lebron_James'
 df = pd.concat([stephen, james, lebron], axis=0)
 df['date'] = pd.to_datetime(df['date']).dt.date
 
-# -------------------------
-# SUNBURST (SIMPLE VERSION)
-# -------------------------
+# Sunburst Builder
 fig = px.sunburst(
     df,
     path=['Player', 'qtr', 'shot_type'],
@@ -43,9 +41,7 @@ fig.update_layout(
     showlegend=False
 )
 
-# -------------------------
-# DASH APP
-# -------------------------
+# Dash App
 app = Dash(__name__)
 
 app.layout = html.Div(
