@@ -120,42 +120,97 @@ fg_clutch_dist = fg_agg(['Player','distance_bin','shot_type'],
 
 def build(data, path, title_suffix):
     if data.empty:
-        # keep layout stable if a view is empty
-        data = pd.DataFrame({'Player':[], 'Attempts':[], 'FG%':[]})
+        data = pd.DataFrame({'Player': [], 'Attempts': [], 'FG%': [], 'Made': []})
         path = ['Player']
+
+    data = data.copy()
+    data['Attempts'] = pd.to_numeric(data['Attempts'], errors='coerce').fillna(0).astype(int)
+    data['Made']     = pd.to_numeric(data['Made'], errors='coerce').fillna(0).astype(int)
+    data['FG%']      = pd.to_numeric(data['FG%'], errors='coerce')
+
+    # Base sunburst 
     fig_tmp = px.sunburst(
         data,
         path=path,
         values='Attempts',
-        color='FG%',
-        color_continuous_scale='RdYlGn',
-        range_color=[0,100],
+        color='Attempts',      
         branchvalues='total',
         maxdepth=-1
     )
 
     tr = fig_tmp.data[0]
     tr.name = title_suffix
+    ids = list(tr.ids)
 
+    custom_data = []
+    agg_attempts = []
+    levels = []
+
+    # Aggregate Attempts + FG% per node, and record depth level
+    for node_id in ids:
+        parts = node_id.split('/')
+        filt = data.copy()
+
+        # depth level: 0 = Player, 1 = Player+qtr, 2 = Player+qtr+shot_type, ...
+        level = len(parts) - 1
+        levels.append(level)
+
+        for i, col in enumerate(path):
+            if i < len(parts):
+                filt = filt[filt[col] == parts[i]]
+
+        total_attempts = int(filt['Attempts'].sum())
+        total_made = int(filt['Made'].sum())
+        fg_pct = (100 * total_made / total_attempts) if total_attempts > 0 else 0
+
+        custom_data.append([fg_pct, total_attempts])
+        agg_attempts.append(total_attempts)
+
+    tr.customdata = np.array(custom_data)
+
+    # Normalize attempts per level so each ring uses its own min/max
+    norm_colors = [0.0] * len(ids) # one normalized value per node
+    unique_levels = sorted(set(levels))
+
+    for lv in unique_levels:
+        # indices for nodes at this level
+        idxs = [i for i, L in enumerate(levels) if L == lv]
+        vals = [agg_attempts[i] for i in idxs]
+
+        vmin, vmax = min(vals), max(vals)
+
+        if vmax == vmin:
+            for i in idxs:
+                norm_colors[i] = 0.5
+        else:
+            for i, v in zip(idxs, vals):
+                norm_colors[i] = (v - vmin) / (vmax - vmin)
+
+    # Attach normalized colors to marker, use 0–1 scale with Low/High labels
     tr.marker = dict(
-        colors=tr.marker.colors,
+        colors=norm_colors, # per-level normalized 0–1
         colorscale='RdYlGn',
         cmin=0,
-        cmax=100,
+        cmax=1,
         colorbar=dict(
-            title=dict(text='FG%', side='right'),
+            title="Attempts",
+            tickvals=[0,1],
+            ticktext=["Low","High"],
             thickness=15,
             len=0.7
         )
     )
-    
+
+    # Tooltip
     tr.hovertemplate = (
-        "<b>%{label}</b><br>"+
-        "Attempts: %{value}<br>"+
-        "FG%: %{color:.1f}%<br>"
+        "<b>%{label}</b><br>"
+        "Attempts: %{customdata[1]:d}<br>"
+        "FG%: %{customdata[0]:.1f}%<br>"
     )
+
     tr.textinfo = "label"
     return tr
+    
 
 # Build traces (use your same dropdown structure)
 att_all = build(fg_qtr_all, ['Player','qtr','shot_type'], 'FG% — All (Quarter)')
@@ -211,38 +266,38 @@ fig_addon.update_layout(height=700, margin=dict(t=80, l=20, r=20, b=20))
 x_min, x_max = df['top'].min(), df['top'].max()
 y_min, y_max = df['left'].min(), df['left'].max()
 
-# # Function to draw an NBA half-court
-# def draw_court(fig, court_color='black'):
-#     shapes = []
-#     # Hoop
-#     shapes.append(dict(type='circle', xref='x', yref='y', x0=245, y0=30, x1=255, y1=40, line=dict(color=court_color)))
-#     # Backboard
-#     shapes.append(dict(type='line', xref='x', yref='y', x0=228, y0=29, x1=270, y1=29, line=dict(color=court_color)))
-#     # Paint area
-#     shapes.append(dict(type='rect', xref='x', yref='y', x0=194, y0=0, x1=306, y1=190, line=dict(color=court_color), fillcolor='rgba(0,0,0,0)'))
-#     # Free throw circle
-#     shapes.append(dict(type='circle', xref='x', yref='y', x0=194, y0=130, x1=306, y1=250, line=dict(color=court_color)))
-#     # Three point arc
-#     shapes.append(dict(type='path', xref='x', yref='y', path='M 30 150 Q 250 445 450 150', line=dict(color=court_color)))
-#     shapes.append(dict(type='line', xref='x', yref='y', x0=30, y0=150, x1=30, y1=0, line=dict(color=court_color)))
-#     shapes.append(dict(type='line', xref='x', yref='y', x0=450, y0=150, x1=450, y1=0, line=dict(color=court_color)))
+# Function to draw an NBA half-court
+def draw_court(fig, court_color='black'):
+    shapes = []
+    # Hoop
+    shapes.append(dict(type='circle', xref='x', yref='y', x0=245, y0=30, x1=255, y1=40, line=dict(color=court_color)))
+    # Backboard
+    shapes.append(dict(type='line', xref='x', yref='y', x0=228, y0=29, x1=270, y1=29, line=dict(color=court_color)))
+    # Paint area
+    shapes.append(dict(type='rect', xref='x', yref='y', x0=194, y0=0, x1=306, y1=190, line=dict(color=court_color), fillcolor='rgba(0,0,0,0)'))
+    # Free throw circle
+    shapes.append(dict(type='circle', xref='x', yref='y', x0=194, y0=130, x1=306, y1=250, line=dict(color=court_color)))
+    # Three point arc
+    shapes.append(dict(type='path', xref='x', yref='y', path='M 30 150 Q 250 445 450 150', line=dict(color=court_color)))
+    shapes.append(dict(type='line', xref='x', yref='y', x0=30, y0=150, x1=30, y1=0, line=dict(color=court_color)))
+    shapes.append(dict(type='line', xref='x', yref='y', x0=450, y0=150, x1=450, y1=0, line=dict(color=court_color)))
 
-#     fig.update_layout(shapes=shapes)
-#     return fig
+    fig.update_layout(shapes=shapes)
+    return fig
 
-# # Initial scatter with court
-# scatter_fig = px.scatter(
-#     df, x='left', y='top',
-#     color='MadeLabel',
-#     color_discrete_map={'Make':'green', 'Miss':'red'},
-#     labels={'left':'X','top':'Y'},
-#     title='Shot Chart',
-#     range_x=[y_min, y_max],
-#     range_y=[x_max, x_min],
-#     height=800
-# )
-# scatter_fig.update_traces(marker=dict(size=12))
-# scatter_fig = draw_court(scatter_fig)
+# Initial scatter with court
+scatter_fig = px.scatter(
+    df, x='left', y='top',
+    color='MadeLabel',
+    color_discrete_map={'Make':'green', 'Miss':'red'},
+    labels={'left':'X','top':'Y'},
+    title='Shot Chart',
+    range_x=[y_min, y_max],
+    range_y=[x_max, x_min],
+    height=800
+)
+scatter_fig.update_traces(marker=dict(size=12))
+scatter_fig = draw_court(scatter_fig)
 
 # Dash App
 app = dash.Dash(__name__)
@@ -250,10 +305,10 @@ app = dash.Dash(__name__)
 app.layout = html.Div([
     html.H2("NBA Last Minute Shot Analysis"),
     html.Div(style={'display': 'flex', 'width': '95%', 'margin': 'auto'}, children=[
-        # html.Div(
-        #     dcc.Graph(id='scatter', figure=scatter_fig),
-        #     style={'flex': '1', 'margin-right': '10px', 'width': '70%'}
-        # ),
+        html.Div(
+            dcc.Graph(id='scatter', figure=scatter_fig),
+            style={'flex': '1', 'margin-right': '10px', 'width': '70%'}
+        ),
         html.Div(
             dcc.Graph(id='sunburst', figure=fig_addon),
             style={'flex': '1', 'width': '100%', 'minWidth': '700px'}
@@ -261,72 +316,72 @@ app.layout = html.Div([
     ])
 ])
 
-# # Callback to sync shot chart with sunburst click data
-# @app.callback(
-#     Output('scatter', 'figure'),
-#     Input('sunburst', 'clickData')
-# )
-# def update_scatter(clickData):
-#     dff = df.copy()
-#     sunburst_filters = {
-#         0: {'qtr': q_all,  'distance_bin': None},
-#         1: {'qtr': q_reg,  'distance_bin': None},
-#         2: {'qtr': q_ot,   'distance_bin': None},
-#         3: {'qtr': q_all,  'distance_bin': 'any'},
-#         4: {'qtr': q_reg,  'distance_bin': 'any'},
-#         5: {'qtr': q_ot,   'distance_bin': 'any'},
-#         6: {'qtr': ['4th Qtr'], 'clutch': True},
-#         7: {'qtr': ['4th Qtr'], 'distance_bin': 'any', 'clutch': True}
-#     }
+# Callback to sync shot chart with sunburst click data
+@app.callback(
+    Output('scatter', 'figure'),
+    Input('sunburst', 'clickData')
+)
+def update_scatter(clickData):
+    dff = df.copy()
+    sunburst_filters = {
+        0: {'qtr': q_all,  'distance_bin': None},
+        1: {'qtr': q_reg,  'distance_bin': None},
+        2: {'qtr': q_ot,   'distance_bin': None},
+        3: {'qtr': q_all,  'distance_bin': 'any'},
+        4: {'qtr': q_reg,  'distance_bin': 'any'},
+        5: {'qtr': q_ot,   'distance_bin': 'any'},
+        6: {'qtr': ['4th Qtr'], 'clutch': True},
+        7: {'qtr': ['4th Qtr'], 'distance_bin': 'any', 'clutch': True}
+    }
 
-#     if clickData:
-#         mode = clickData['points'][0]['curveNumber']
-#         filters = sunburst_filters.get(mode, {})
+    if clickData:
+        mode = clickData['points'][0]['curveNumber']
+        filters = sunburst_filters.get(mode, {})
 
-#         # Apply base filters
-#         if 'qtr' in filters and filters['qtr'] is not None:
-#             dff = dff[dff['qtr'].isin(filters['qtr'])]
-#         if 'distance_bin' in filters and filters['distance_bin'] == 'any':
-#             dff = dff[dff['distance_bin'].notna()]
-#         if 'clutch' in filters and filters['clutch']:
-#             dff = dff[
-#                 (dff['qtr'] == '4th Qtr') &
-#                 (dff['sec_left'].le(CLUTCH_MINUTES * 60)) &
-#                 (dff['score_margin'].le(CLUTCH_MARGIN))
-#             ]
+        # Apply base filters
+        if 'qtr' in filters and filters['qtr'] is not None:
+            dff = dff[dff['qtr'].isin(filters['qtr'])]
+        if 'distance_bin' in filters and filters['distance_bin'] == 'any':
+            dff = dff[dff['distance_bin'].notna()]
+        if 'clutch' in filters and filters['clutch']:
+            dff = dff[
+                (dff['qtr'] == '4th Qtr') &
+                (dff['sec_left'].le(CLUTCH_MINUTES * 60)) &
+                (dff['score_margin'].le(CLUTCH_MARGIN))
+            ]
 
-#         # Apply hierarchical filters from sunburst
-#         hierarchy = clickData['points'][0]['id'].split('/')
-#         if len(hierarchy) >= 1:
-#             dff = dff[dff['Player'] == hierarchy[0]]
-#         if len(hierarchy) >= 2:
-#             second = hierarchy[1]
-#             if mode in [6, 7]:  
-#                 if second in df['shot_type'].unique():
-#                     dff = dff[dff['shot_type'] == second]
-#                 elif second in df['distance_bin'].unique():
-#                     dff = dff[dff['distance_bin'] == second]
-#             else:
-#                 if second in df['qtr'].unique():
-#                     dff = dff[dff['qtr'] == second]
-#                 elif second in df['distance_bin'].unique():
-#                     dff = dff[dff['distance_bin'] == second]
-#         if len(hierarchy) >= 3:
-#             third = hierarchy[2]
-#             if third in df['shot_type'].unique():
-#                 dff = dff[dff['shot_type'] == third]
+        # Apply hierarchical filters from sunburst
+        hierarchy = clickData['points'][0]['id'].split('/')
+        if len(hierarchy) >= 1:
+            dff = dff[dff['Player'] == hierarchy[0]]
+        if len(hierarchy) >= 2:
+            second = hierarchy[1]
+            if mode in [6, 7]:  
+                if second in df['shot_type'].unique():
+                    dff = dff[dff['shot_type'] == second]
+                elif second in df['distance_bin'].unique():
+                    dff = dff[dff['distance_bin'] == second]
+            else:
+                if second in df['qtr'].unique():
+                    dff = dff[dff['qtr'] == second]
+                elif second in df['distance_bin'].unique():
+                    dff = dff[dff['distance_bin'] == second]
+        if len(hierarchy) >= 3:
+            third = hierarchy[2]
+            if third in df['shot_type'].unique():
+                dff = dff[dff['shot_type'] == third]
 
-#     fig = px.scatter(
-#         dff, x='left', y='top', color='MadeLabel',
-#         color_discrete_map={'Make':'green', 'Miss':'red'},
-#         labels={'left':'X','top':'Y'},
-#         title='Shot Chart',
-#         range_x=[y_min, y_max],
-#         range_y=[x_max, x_min]
-#     )
-#     fig.update_traces(marker=dict(size=12))
-#     fig = draw_court(fig)
-#     return fig
+    fig = px.scatter(
+        dff, x='left', y='top', color='MadeLabel',
+        color_discrete_map={'Make':'green', 'Miss':'red'},
+        labels={'left':'X','top':'Y'},
+        title='Shot Chart',
+        range_x=[y_min, y_max],
+        range_y=[x_max, x_min]
+    )
+    fig.update_traces(marker=dict(size=12))
+    fig = draw_court(fig)
+    return fig
 
 if __name__ == "__main__":
     app.run(debug=True, port=8050)
